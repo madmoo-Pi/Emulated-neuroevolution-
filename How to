@@ -1,0 +1,283 @@
+# Neuroevolution of a 4-Layered Neural Network in Python
+
+Here's a complete implementation of neuroevolution for a 4-layered neural network using Python. This code uses evolutionary algorithms to optimize the network's weights.
+
+```python
+import numpy as np
+import random
+from typing import List, Tuple
+import matplotlib.pyplot as plt
+
+# Neural Network Class
+class NeuralNetwork:
+    def __init__(self, layer_sizes: List[int]):
+        """
+        Initialize a 4-layer neural network with random weights
+        
+        Args:
+            layer_sizes: List of layer sizes [input, hidden1, hidden2, output]
+        """
+        self.layer_sizes = layer_sizes
+        
+        # Initialize weights with He initialization
+        self.weights = [
+            np.random.randn(layer_sizes[i], layer_sizes[i+1]) * np.sqrt(2./layer_sizes[i])
+            for i in range(len(layer_sizes)-1)
+        ]
+        
+        # Initialize biases
+        self.biases = [np.zeros((1, size)) for size in layer_sizes[1:]]
+    
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """
+        Forward pass through the network
+        
+        Args:
+            x: Input data (1D array)
+            
+        Returns:
+            Network output
+        """
+        x = np.array(x).reshape(1, -1)  # Ensure input is 2D
+        
+        # Hidden layers with ReLU activation
+        for i in range(len(self.weights)-1):
+            x = np.maximum(0, x @ self.weights[i] + self.biases[i])
+        
+        # Output layer with sigmoid activation
+        x = 1 / (1 + np.exp(-(x @ self.weights[-1] + self.biases[-1])))
+        
+        return x
+    
+    def get_weights_biases(self) -> List[np.ndarray]:
+        """Get all weights and biases as a flat array"""
+        flat_params = []
+        for layer in self.weights:
+            flat_params.extend(layer.flatten())
+        for bias in self.biases:
+            flat_params.extend(bias.flatten())
+        return np.array(flat_params)
+    
+    def set_weights_biases(self, flat_params: np.ndarray):
+        """Set weights and biases from a flat array"""
+        ptr = 0
+        
+        # Set weights
+        for i in range(len(self.weights)):
+            w_size = self.weights[i].size
+            self.weights[i] = np.array(flat_params[ptr:ptr+w_size]).reshape(self.weights[i].shape)
+            ptr += w_size
+        
+        # Set biases
+        for i in range(len(self.biases)):
+            b_size = self.biases[i].size
+            self.biases[i] = np.array(flat_params[ptr:ptr+b_size]).reshape(self.biases[i].shape)
+            ptr += b_size
+
+# Genetic Algorithm for Neuroevolution
+class Neuroevolution:
+    def __init__(self, population_size: int, layer_sizes: List[int], 
+                 mutation_rate: float = 0.1, mutation_scale: float = 0.2):
+        """
+        Initialize the neuroevolution algorithm
+        
+        Args:
+            population_size: Number of networks in population
+            layer_sizes: Architecture of the neural networks
+            mutation_rate: Probability of mutation for each weight
+            mutation_scale: Scale of the Gaussian noise for mutation
+        """
+        self.population_size = population_size
+        self.layer_sizes = layer_sizes
+        self.mutation_rate = mutation_rate
+        self.mutation_scale = mutation_scale
+        
+        # Create initial population
+        self.population = [NeuralNetwork(layer_sizes) for _ in range(population_size)]
+        self.fitness_scores = np.zeros(population_size)
+    
+    def evaluate(self, fitness_function):
+        """
+        Evaluate the entire population using the provided fitness function
+        
+        Args:
+            fitness_function: Function that takes a neural network and returns a fitness score
+        """
+        for i, network in enumerate(self.population):
+            self.fitness_scores[i] = fitness_function(network)
+    
+    def selection(self, elite_frac: float = 0.2) -> List[NeuralNetwork]:
+        """
+        Select the top performers to be parents for the next generation
+        
+        Args:
+            elite_frac: Fraction of population to keep as elites
+            
+        Returns:
+            Selected parents
+        """
+        # Sort by fitness
+        sorted_indices = np.argsort(self.fitness_scores)[::-1]
+        elite_size = int(self.population_size * elite_frac)
+        
+        # Select elites
+        elites = [self.population[i] for i in sorted_indices[:elite_size]]
+        
+        # Select remaining parents through fitness-proportional selection
+        parents = elites.copy()
+        fitness_sum = np.sum(self.fitness_scores)
+        if fitness_sum > 0:
+            probs = self.fitness_scores / fitness_sum
+        else:
+            probs = np.ones(self.population_size) / self.population_size
+        
+        # Select remaining parents
+        remaining_size = self.population_size - elite_size
+        selected_indices = np.random.choice(
+            range(self.population_size), 
+            size=remaining_size, 
+            p=probs,
+            replace=True
+        )
+        
+        parents.extend([self.population[i] for i in selected_indices])
+        return parents
+    
+    def crossover(self, parent1: NeuralNetwork, parent2: NeuralNetwork) -> NeuralNetwork:
+        """
+        Create a child network by combining parameters from two parents
+        
+        Args:
+            parent1: First parent network
+            parent2: Second parent network
+            
+        Returns:
+            Child network
+        """
+        child = NeuralNetwork(self.layer_sizes)
+        
+        # Get flat parameters from parents
+        p1_params = parent1.get_weights_biases()
+        p2_params = parent2.get_weights_biases()
+        
+        # Uniform crossover
+        mask = np.random.randint(0, 2, size=p1_params.shape)
+        child_params = np.where(mask, p1_params, p2_params)
+        
+        child.set_weights_biases(child_params)
+        return child
+    
+    def mutate(self, network: NeuralNetwork):
+        """
+        Apply mutations to a network's parameters
+        
+        Args:
+            network: Network to mutate
+        """
+        params = network.get_weights_biases()
+        
+        # Apply mutation
+        mask = np.random.random(size=params.shape) < self.mutation_rate
+        noise = np.random.normal(scale=self.mutation_scale, size=params.shape)
+        params = np.where(mask, params + noise, params)
+        
+        network.set_weights_biases(params)
+    
+    def next_generation(self, elite_frac: float = 0.2):
+        """Create the next generation of networks"""
+        parents = self.selection(elite_frac)
+        new_population = []
+        
+        # Keep elites unchanged
+        elite_size = int(self.population_size * elite_frac)
+        new_population.extend(parents[:elite_size])
+        
+        # Create offspring
+        while len(new_population) < self.population_size:
+            # Select two random parents (could be the same)
+            p1, p2 = random.choices(parents, k=2)
+            child = self.crossover(p1, p2)
+            self.mutate(child)
+            new_population.append(child)
+        
+        self.population = new_population
+        self.fitness_scores = np.zeros(self.population_size)
+
+# Example Usage
+if __name__ == "__main__":
+    # XOR problem as a test case
+    def fitness_function(network: NeuralNetwork) -> float:
+        inputs = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        targets = [0, 1, 1, 0]  # XOR outputs
+        total_error = 0
+        
+        for x, target in zip(inputs, targets):
+            output = network.forward(x)
+            error = (output[0][0] - target) ** 2
+            total_error += error
+        
+        # Fitness is inverse of error (higher is better)
+        return 1.0 / (1.0 + total_error)
+    
+    # Hyperparameters
+    POPULATION_SIZE = 50
+    GENERATIONS = 100
+    LAYER_SIZES = [2, 4, 4, 1]  # 4-layer network (input, hidden1, hidden2, output)
+    
+    # Create neuroevolution instance
+    ne = Neuroevolution(POPULATION_SIZE, LAYER_SIZES, mutation_rate=0.2, mutation_scale=0.3)
+    
+    # Track best fitness over generations
+    best_fitness_history = []
+    
+    # Run evolution
+    for generation in range(GENERATIONS):
+        ne.evaluate(fitness_function)
+        best_fitness = np.max(ne.fitness_scores)
+        best_fitness_history.append(best_fitness)
+        
+        print(f"Generation {generation + 1}: Best Fitness = {best_fitness:.4f}")
+        
+        if best_fitness > 3.9:  # Close enough to perfect fitness for XOR
+            print("Solution found!")
+            break
+        
+        ne.next_generation(elite_frac=0.2)
+    
+    # Plot fitness progression
+    plt.plot(best_fitness_history)
+    plt.title("Best Fitness Over Generations")
+    plt.xlabel("Generation")
+    plt.ylabel("Fitness")
+    plt.show()
+    
+    # Test the best network
+    best_index = np.argmax(ne.fitness_scores)
+    best_network = ne.population[best_index]
+    
+    print("\nTesting the best network:")
+    for x in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+        output = best_network.forward(x)
+        print(f"Input: {x} -> Output: {output[0][0]:.4f}")
+```
+
+## How This Works:
+
+1. **Neural Network Class**: Implements a 4-layer neural network with ReLU activations in hidden layers and sigmoid output.
+
+2. **Neuroevolution Class**: Handles the evolutionary process:
+   - Population initialization
+   - Fitness evaluation
+   - Selection (elitism + fitness-proportional)
+   - Crossover (uniform crossover)
+   - Mutation (Gaussian noise)
+
+3. **Example Usage**: Solves the XOR problem to demonstrate the neuroevolution in action.
+
+## Customization Options:
+
+1. **Network Architecture**: Change `LAYER_SIZES` to modify the network structure
+2. **Evolution Parameters**: Adjust `POPULATION_SIZE`, `GENERATIONS`, `mutation_rate`, etc.
+3. **Problem Domain**: Replace the `fitness_function` with your own to solve different problems
+
+This implementation provides a solid foundation for neuroevolution that you can adapt to more complex problems by modifying the fitness function and network architecture.
